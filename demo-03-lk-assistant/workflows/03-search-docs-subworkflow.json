@@ -1,0 +1,25 @@
+{
+    "_comment": "ЗАГОТОВКА. Под-воркфлоу, вызывается из 01-assistant-chat как tool для AI Agent.",
+    "_spec": {
+        "name": "03 — Search Docs (sub-workflow)",
+        "description": "Vector search по pgvector — принимает текстовый запрос и tenant_id, возвращает релевантные чанки документов.",
+        "trigger": {
+            "type": "@n8n/n8n-nodes-langchain.executeWorkflowTrigger",
+            "inputs": {
+                "query": "string",
+                "tenant_id": "number (передаётся из основного воркфлоу, НЕ от LLM)"
+            }
+        },
+        "nodes": [
+            { "step": 1, "name": "Generate Embedding", "type": "httpRequest", "url": "http://ollama:11434/api/embed" },
+            { "step": 2, "name": "Format Vector",     "type": "code (JavaScript)",  "note": "массив → строка '[0.1,0.2,...]'" },
+            { "step": 3, "name": "Vector Search",     "type": "postgres",           "query": "см. snippets/SNIPPETS.md" },
+            { "step": 4, "name": "Filter Low Sim",    "type": "code (JavaScript)",  "note": "отбрасываем similarity < 0.3" },
+            { "step": 5, "name": "Format Response",   "type": "code (JavaScript)",  "note": "форматируем для LLM" }
+        ],
+        "important": [
+            "tenant_id ОБЯЗАТЕЛЬНО включать в WHERE — это единственный barrier против утечки между клиентами",
+            "ivfflat-индекс на embedding даёт быстрый ANN, но не идеально точный. Для демо хватит."
+        ]
+    }
+}

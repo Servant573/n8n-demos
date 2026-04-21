@@ -1,0 +1,56 @@
+{
+    "_comment": "ЗАГОТОВКА.",
+    "_spec": {
+        "name": "02 — Document Indexer",
+        "description": "Индексирует документы из lk_assistant.documents в pgvector для RAG.",
+        "trigger": {
+            "type": "manual + schedule (hourly)"
+        },
+        "nodes": [
+            {
+                "step": 1,
+                "name": "Select Unindexed Docs",
+                "type": "postgres",
+                "query": "SELECT id, tenant_id, title, content FROM lk_assistant.documents WHERE id NOT IN (SELECT DISTINCT document_id FROM lk_assistant.document_chunks)"
+            },
+            {
+                "step": 2,
+                "name": "Split Docs",
+                "type": "splitInBatches",
+                "batchSize": 1
+            },
+            {
+                "step": 3,
+                "name": "Chunk Content",
+                "type": "code (JavaScript)",
+                "purpose": "Нарезать content на чанки по ~500 токенов с перекрытием 50. См. snippets/chunker.js",
+                "output": "массив { document_id, tenant_id, chunk_idx, chunk_text }"
+            },
+            {
+                "step": 4,
+                "name": "Split Chunks",
+                "type": "splitInBatches",
+                "batchSize": 10
+            },
+            {
+                "step": 5,
+                "name": "Generate Embedding",
+                "type": "httpRequest",
+                "method": "POST",
+                "url": "http://ollama:11434/api/embed",
+                "body": {
+                    "model": "{{ $env.OLLAMA_MODEL_EMBED }}",
+                    "input": "{{ $json.chunk_text }}"
+                },
+                "purpose": "Возвращает embeddings[0] — массив из 768 чисел"
+            },
+            {
+                "step": 6,
+                "name": "Insert Chunk",
+                "type": "postgres",
+                "query": "INSERT INTO lk_assistant.document_chunks (document_id, tenant_id, chunk_text, chunk_idx, embedding) VALUES ($1, $2, $3, $4, $5::vector)",
+                "purpose": "Вектор передаётся как строка '[0.1, 0.2, ...]' — pgvector сам распарсит"
+            }
+        ]
+    }
+}

@@ -1,0 +1,45 @@
+{
+    "_comment": "ЗАГОТОВКА. Универсальный error handler — назначается в настройках каждого основного воркфлоу.",
+    "_spec": {
+        "name": "00 — Error Handler (shared)",
+        "description": "Ловит необработанные ошибки из других воркфлоу, логирует и уведомляет. Назначается в settings → Error workflow каждого основного workflow.",
+        "trigger": {
+            "type": "n8n-nodes-base.errorTrigger",
+            "note": "Автоматически срабатывает при падении 'родительского' workflow"
+        },
+        "nodes": [
+            {
+                "step": 1,
+                "name": "Extract Error Info",
+                "type": "code",
+                "purpose": "Выдернуть из $json имя воркфлоу, имя упавшей ноды, stack trace, execution_id"
+            },
+            {
+                "step": 2,
+                "name": "Log to DB",
+                "type": "postgres",
+                "purpose": "INSERT в служебную таблицу system.workflow_errors (создаётся опционально)"
+            },
+            {
+                "step": 3,
+                "name": "Throttle",
+                "type": "code",
+                "purpose": "Если тот же воркфлоу падал >5 раз за час — не спамим, пишем одно общее уведомление"
+            },
+            {
+                "step": 4,
+                "name": "Format Message",
+                "type": "code",
+                "purpose": "Markdown-сообщение с workflow name, node name, краткой ошибкой, ссылкой на execution в UI"
+            },
+            {
+                "step": 5,
+                "name": "Notify #ops",
+                "type": "mattermost",
+                "channel": "ops",
+                "message_example": ":x: **Workflow failed** · {{ workflowName }}\n\n**Нода:** {{ nodeName }}\n**Ошибка:** {{ errorMessage }}\n\n[Открыть execution](http://localhost:5678/execution/{{ executionId }})"
+            }
+        ],
+        "integration": "В каждом основном воркфлоу: Settings → Error workflow → выбрать '00 — Error Handler (shared)'"
+    }
+}

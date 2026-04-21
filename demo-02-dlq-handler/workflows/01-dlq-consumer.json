@@ -1,0 +1,139 @@
+{
+    "_comment": "ЗАГОТОВКА. Собирается в N8N UI по спецификации ниже.",
+    "_spec": {
+        "name": "01 — DLQ Consumer",
+        "description": "Слушает integration.dlq, классифицирует ошибки через Ollama, роутит в Mattermost/GitLab.",
+        "trigger": {
+            "type": "n8n-nodes-base.rabbitmqTrigger",
+            "queue": "integration.dlq",
+            "options": {
+                "acknowledge": "executionFinishes",
+                "prefetchCount": 5,
+                "contentIsBinary": false
+            }
+        },
+        "nodes": [
+            {
+                "step": 1,
+                "name": "Extract Payload",
+                "type": "code (JavaScript)",
+                "purpose": "Парсим body как JSON, если fail — ставим флаг parse_error. Достаём routing_key и x-death из headers. Код в snippets/SNIPPETS.md",
+                "output": "{ payload, parse_error, routing_key, death_reason, counterparty_key }"
+            },
+            {
+                "step": 2,
+                "name": "Load Counterparty",
+                "type": "n8n-nodes-base.postgres",
+                "query": "SELECT id, name, inn, mattermost_user, manager_email FROM dlq_handler.counterparties WHERE amqp_queue = $1 OR id = $2",
+                "params": "{{ $json.routing_key }}, {{ $json.payload.counterparty_id }}",
+                "continueOnFail": true
+            },
+            {
+                "step": 3,
+                "name": "Load Stats",
+                "type": "n8n-nodes-base.postgres",
+                "query": "SELECT COUNT(*) FILTER (WHERE processed_at > NOW() - INTERVAL '1 hour') AS errors_1h, COUNT(*) FILTER (WHERE processed_at > NOW() - INTERVAL '24 hours') AS errors_24h, MAX(processed_at) AS last_seen_error FROM dlq_handler.dlq_events WHERE counterparty_id = $1",
+                "params": "{{ $('Load Counterparty').first().json.id }}"
+            },
+            {
+                "step": 4,
+                "name": "Merge Context",
+                "type": "merge (combine mode)",
+                "purpose": "Склеиваем payload + counterparty + stats в один объект для промпта"
+            },
+            {
+                "step": 5,
+                "name": "Sanitize PII",
+                "type": "code (JavaScript)",
+                "purpose": "Маскируем номера телефонов, email'ы, ИНН (оставляя первые 3 цифры). См. snippets/SNIPPETS.md",
+                "output": "{ ... sanitized payload ... }"
+            },
+            {
+                "step": 6,
+                "name": "Classify via Ollama",
+                "type": "n8n-nodes-base.httpRequest",
+                "method": "POST",
+                "url": "http://ollama:11434/api/generate",
+                "bodyJson": "см. snippets/SNIPPETS.md (triage-prompt + body template)",
+                "options": { "timeout": 30000 }
+            },
+            {
+                "step": 7,
+                "name": "Parse & Validate AI",
+                "type": "code (JavaScript)",
+                "purpose": "Парсим JSON, валидируем enum, fallback на manual_review при сбое. См. snippets."
+            },
+            {
+                "step": 8,
+                "name": "Save Event",
+                "type": "n8n-nodes-base.postgres",
+                "operation": "insert",
+                "table": "dlq_handler.dlq_events",
+                "fields": "counterparty_id, original_queue, original_payload, error_headers, ai_category, ai_severity, ai_summary_ru, ai_action, routing_target"
+            },
+            {
+                "step": 9,
+                "name": "Route by Category",
+                "type": "switch",
+                "rules": [
+                    { "category": "our_bug", "output": 0 },
+                    { "category": "partner_data", "output": 1 },
+                    { "category": "infrastructure", "output": 2 },
+                    { "category": "business_rule", "output": 3 },
+                    { "default": "manual_review", "output": 4 }
+                ]
+            },
+            {
+                "step": "10a",
+                "branch": "our_bug",
+                "name": "Create GitLab Issue",
+                "type": "n8n-nodes-base.httpRequest",
+                "method": "POST",
+                "url": "http://gitlab-mock:4001/api/v4/projects/5/issues",
+                "purpose": "svc_integration = project 5",
+                "bodyJson": "{ title: '[DLQ] ' + summary_ru, description: полные детали + payload + AI reasoning, labels: ['bug','dlq','auto'] }"
+            },
+            {
+                "step": "10a.2",
+                "branch": "our_bug",
+                "name": "Notify #bugs",
+                "type": "mattermost",
+                "channel": "bugs",
+                "message": "см. snippets/SNIPPETS.md (mm-templates)"
+            },
+            {
+                "step": "10b",
+                "branch": "partner_data",
+                "name": "DM Manager",
+                "type": "mattermost",
+                "channel": "@{{ $('Load Counterparty').first().json.mattermost_user }}",
+                "message": "Обращение к персональному менеджеру контрагента"
+            },
+            {
+                "step": "10c",
+                "branch": "infrastructure",
+                "name": "Notify #ops",
+                "type": "mattermost",
+                "channel": "ops",
+                "message": "⚠️ Инфра-алерт с кнопкой retry"
+            },
+            {
+                "step": "10d",
+                "branch": "business_rule",
+                "name": "Notify #analytics",
+                "type": "mattermost",
+                "channel": "analytics",
+                "message": "ℹ️ Нарушение бизнес-правила — на аналитика"
+            },
+            {
+                "step": "10e",
+                "branch": "default/manual_review",
+                "name": "Notify #ops (fallback)",
+                "type": "mattermost",
+                "channel": "ops",
+                "message": "❓ Не удалось классифицировать автоматически"
+            }
+        ],
+        "error_workflow": "workflows/error-handler.json"
+    }
+}

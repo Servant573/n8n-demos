@@ -1,0 +1,34 @@
+# Секреты
+.env
+.env.local
+.env.*.local
+
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build артефакты
+dist/
+build/
+*.tsbuildinfo
+
+# IDE / tools
+.vscode/
+.idea/
+.claude/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Docker volumes (если вдруг куда-то положились локально)
+pgdata/
+ollama_data/
+n8n_data/
+mattermost_data/
+rabbitmq_data/

@@ -1,0 +1,212 @@
+# ============================================================================
+# Общая инфраструктура для всех демо.
+# Запуск: docker compose up -d
+# ============================================================================
+
+networks:
+  demo-net:
+    driver: bridge
+
+volumes:
+  pgdata:
+  n8n_data:
+  ollama_data:
+  mattermost_data:
+  mattermost_config:
+  mattermost_logs:
+  mattermost_plugins:
+  mattermost_client_plugins:
+  rabbitmq_data:
+
+services:
+  # ── Postgres с pgvector для эмбеддингов ────────────────────────────────────
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: demo-postgres
+    networks: [demo-net]
+    environment:
+      POSTGRES_DB: demo
+      POSTGRES_USER: demo
+      POSTGRES_PASSWORD: demo_secret
+      # отдельные БД для n8n и mattermost создаются init-скриптом
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./shared/init-db.sql:/docker-entrypoint-initdb.d/01-init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U demo"]
+      interval: 5s
+      retries: 10
+
+  # ── Ollama — локальные LLM ─────────────────────────────────────────────────
+  ollama:
+    image: ollama/ollama:rocm
+    container_name: demo-ollama
+    networks: [demo-net]
+    # port 11434 not exposed — native Ollama may be using it on the host
+    environment:
+      OLLAMA_HOST: "0.0.0.0"
+      HSA_OVERRIDE_GFX_VERSION: "10.3.0"
+    volumes:
+      - /usr/share/ollama/.ollama:/root/.ollama
+    devices:
+      - /dev/kfd:/dev/kfd
+      - /dev/dri:/dev/dri
+    group_add:
+      - "44"
+      - "110"
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      retries: 10
+
+  # ── Одноразовая загрузка моделей ───────────────────────────────────────────
+  ollama-bootstrap:
+    image: curlimages/curl:latest
+    container_name: demo-ollama-bootstrap
+    networks: [demo-net]
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: "no"
+    volumes:
+      - ./shared/ollama-bootstrap.sh:/bootstrap.sh:ro
+    entrypoint: ["sh", "/bootstrap.sh"]
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      OLLAMA_MODEL_CHAT:  ${OLLAMA_MODEL_CHAT:-qwen2.5:7b}
+      OLLAMA_MODEL_CODE:  ${OLLAMA_MODEL_CODE:-qwen2.5-coder:7b}
+      OLLAMA_MODEL_EMBED: ${OLLAMA_MODEL_EMBED:-nomic-embed-text}
+
+  # ── N8N — оркестратор ──────────────────────────────────────────────────────
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: demo-n8n
+    networks: [demo-net]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: postgres
+      DB_POSTGRESDB_PORT: 5432
+      DB_POSTGRESDB_DATABASE: n8n
+      DB_POSTGRESDB_USER: demo
+      DB_POSTGRESDB_PASSWORD: demo_secret
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY}
+      N8N_HOST: localhost
+      N8N_PORT: 5678
+      N8N_PROTOCOL: http
+      WEBHOOK_URL: http://localhost:5678/
+      GENERIC_TIMEZONE: Europe/Moscow
+      # ↓ Для тестов разрешаем использовать внешние npm в Code-нодах.
+      # В продакшне настраивай whitelist.
+      NODE_FUNCTION_ALLOW_EXTERNAL: "semver,axios,lodash,moment"
+      N8N_LOG_LEVEL: info
+    ports:
+      - "5678:5678"
+    volumes:
+      - n8n_data:/home/node/.n8n
+      # монтируем все демо-воркфлоу сразу — их можно будет импортировать из UI
+      - ./demo-01-cve-watcher/workflows:/demo-workflows/01-cve:ro
+      - ./demo-02-dlq-handler/workflows:/demo-workflows/02-dlq:ro
+      - ./demo-03-lk-assistant/workflows:/demo-workflows/03-lk:ro
+
+  # ── Mattermost — замена Telegram, self-hosted ──────────────────────────────
+  mattermost:
+    image: mattermost/mattermost-team-edition:latest
+    container_name: demo-mattermost
+    networks: [demo-net]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      TZ: Europe/Moscow
+      MM_SQLSETTINGS_DRIVERNAME: postgres
+      MM_SQLSETTINGS_DATASOURCE: "postgres://demo:demo_secret@postgres:5432/mattermost?sslmode=disable&connect_timeout=10"
+      MM_BLEVESETTINGS_INDEXDIR: /mattermost/bleve-indexes
+      MM_SERVICESETTINGS_SITEURL: http://localhost:8065
+      MM_SERVICESETTINGS_ENABLEBOTACCOUNTCREATION: "true"
+      MM_SERVICESETTINGS_ENABLEUSERACCESSTOKENS: "true"
+      MM_TEAMSETTINGS_ENABLEOPENSERVER: "true"
+    ports:
+      - "8065:8065"
+    volumes:
+      - mattermost_data:/mattermost/data
+      - mattermost_config:/mattermost/config
+      - mattermost_logs:/mattermost/logs
+      - mattermost_plugins:/mattermost/plugins
+      - mattermost_client_plugins:/mattermost/client/plugins
+
+  # ── Автонастройка Mattermost: админ, команда, каналы, бот ─────────────────
+  mattermost-bootstrap:
+    image: alpine:3.19
+    container_name: demo-mm-bootstrap
+    networks: [demo-net]
+    depends_on:
+      - mattermost
+    restart: "no"
+    volumes:
+      - ./shared/mattermost-bootstrap.sh:/bootstrap.sh:ro
+    entrypoint: ["sh", "-c", "apk add --no-cache curl jq > /dev/null 2>&1 && sh /bootstrap.sh"]
+    environment:
+      MATTERMOST_URL: http://mattermost:8065
+      MM_ADMIN_EMAIL:  ${MM_ADMIN_EMAIL:-admin@demo.local}
+      MM_ADMIN_USER:   ${MM_ADMIN_USER:-admin}
+      MM_ADMIN_PASS:   ${MM_ADMIN_PASS:-Demo_secret1}
+      MM_TEAM_NAME:    ${MM_TEAM_NAME:-demo}
+      MM_CHANNELS:     "security ops bugs analytics"
+
+  # ── Mock-серверы для demo-01 (GitLab API + CVE feed) ────────────────────────
+  cve-watcher-mocks:
+    build: ./demo-01-cve-watcher/mock-servers
+    container_name: demo-cve-mocks
+    networks:
+      demo-net:
+        aliases:
+          - gitlab-mock
+          - cve-feed-mock
+    ports:
+      - "4001:4001"
+      - "4002:4002"
+
+  # ── Mock svc_lk для demo-03 (LK Assistant) ────────────────────────────────
+  mock-svc-lk:
+    build: ./demo-03-lk-assistant/mock-svc-lk
+    container_name: demo-mock-svc-lk
+    networks:
+      demo-net:
+        aliases:
+          - mock-svc-lk
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: demo
+      DB_USER: demo
+      DB_PASS: demo_secret
+      N8N_ASSISTANT_WEBHOOK: http://n8n:5678/webhook/lk-assistant
+      PORT: 3100
+    ports:
+      - "3100:3100"
+
+  # ── RabbitMQ для demo-02 (DLQ handler) ────────────────────────────────────
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: demo-rabbitmq
+    networks: [demo-net]
+    environment:
+      RABBITMQ_DEFAULT_USER: demo
+      RABBITMQ_DEFAULT_PASS: demo_secret
+    ports:
+      - "5672:5672"     # AMQP
+      - "15672:15672"   # Management UI
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      retries: 10
