@@ -16,12 +16,11 @@ volumes:
   mattermost_logs:
   mattermost_plugins:
   mattermost_client_plugins:
-  rabbitmq_data:
 
 services:
-  # ── Postgres с pgvector для эмбеддингов ────────────────────────────────────
+  # -- Postgres -----------------------------------------------------------------------
   postgres:
-    image: pgvector/pgvector:pg16
+    image: postgres:16-alpine
     container_name: demo-postgres
     networks: [demo-net]
     environment:
@@ -77,7 +76,6 @@ services:
       OLLAMA_HOST: http://ollama:11434
       OLLAMA_MODEL_CHAT:  ${OLLAMA_MODEL_CHAT:-qwen2.5:7b}
       OLLAMA_MODEL_CODE:  ${OLLAMA_MODEL_CODE:-qwen2.5-coder:7b}
-      OLLAMA_MODEL_EMBED: ${OLLAMA_MODEL_EMBED:-nomic-embed-text}
 
   # ── N8N — оркестратор ──────────────────────────────────────────────────────
   n8n:
@@ -110,8 +108,7 @@ services:
       - n8n_data:/home/node/.n8n
       # монтируем все демо-воркфлоу сразу — их можно будет импортировать из UI
       - ./demo-01-cve-watcher/workflows:/demo-workflows/01-cve:ro
-      - ./demo-02-dlq-handler/workflows:/demo-workflows/02-dlq:ro
-      - ./demo-03-lk-assistant/workflows:/demo-workflows/03-lk:ro
+      - ./demo-02-logistics-ai/workflows:/demo-workflows/02-logistics:ro
 
   # ── Mattermost — замена Telegram, self-hosted ──────────────────────────────
   mattermost:
@@ -129,6 +126,7 @@ services:
       MM_SERVICESETTINGS_SITEURL: http://localhost:8065
       MM_SERVICESETTINGS_ENABLEBOTACCOUNTCREATION: "true"
       MM_SERVICESETTINGS_ENABLEUSERACCESSTOKENS: "true"
+      MM_SERVICESETTINGS_ALLOWEDUNTRUSTEDINTERNALCONNECTIONS: "n8n demo-n8n 172.16.0.0/12 10.0.0.0/8"
       MM_TEAMSETTINGS_ENABLEOPENSERVER: "true"
     ports:
       - "8065:8065"
@@ -156,7 +154,7 @@ services:
       MM_ADMIN_USER:   ${MM_ADMIN_USER:-admin}
       MM_ADMIN_PASS:   ${MM_ADMIN_PASS:-Demo_secret1}
       MM_TEAM_NAME:    ${MM_TEAM_NAME:-demo}
-      MM_CHANNELS:     "security ops bugs analytics"
+      MM_CHANNELS:     "security ops logistics"
 
   # ── Mock-серверы для demo-01 (GitLab API + CVE feed) ────────────────────────
   cve-watcher-mocks:
@@ -171,42 +169,3 @@ services:
       - "4001:4001"
       - "4002:4002"
 
-  # ── Mock svc_lk для demo-03 (LK Assistant) ────────────────────────────────
-  mock-svc-lk:
-    build: ./demo-03-lk-assistant/mock-svc-lk
-    container_name: demo-mock-svc-lk
-    networks:
-      demo-net:
-        aliases:
-          - mock-svc-lk
-    depends_on:
-      postgres:
-        condition: service_healthy
-    environment:
-      DB_HOST: postgres
-      DB_PORT: 5432
-      DB_NAME: demo
-      DB_USER: demo
-      DB_PASS: demo_secret
-      N8N_ASSISTANT_WEBHOOK: http://n8n:5678/webhook/lk-assistant
-      PORT: 3100
-    ports:
-      - "3100:3100"
-
-  # ── RabbitMQ для demo-02 (DLQ handler) ────────────────────────────────────
-  rabbitmq:
-    image: rabbitmq:3.13-management-alpine
-    container_name: demo-rabbitmq
-    networks: [demo-net]
-    environment:
-      RABBITMQ_DEFAULT_USER: demo
-      RABBITMQ_DEFAULT_PASS: demo_secret
-    ports:
-      - "5672:5672"     # AMQP
-      - "15672:15672"   # Management UI
-    volumes:
-      - rabbitmq_data:/var/lib/rabbitmq
-    healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "ping"]
-      interval: 10s
-      retries: 10

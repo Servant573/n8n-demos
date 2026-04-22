@@ -11,7 +11,7 @@ MM_ADMIN_USER="${MM_ADMIN_USER:-admin}"
 MM_ADMIN_PASS="${MM_ADMIN_PASS:-Demo_secret1}"
 MM_TEAM_NAME="${MM_TEAM_NAME:-demo}"
 N8N_CONTAINER="${N8N_CONTAINER:-demo-n8n}"
-WORKFLOW_DIR="${WORKFLOW_DIR:-demo-01-cve-watcher/workflows}"
+WORKFLOW_DIRS="${WORKFLOW_DIRS:-demo-01-cve-watcher/workflows demo-02-logistics-ai/workflows}"
 
 echo "===> n8n bootstrap started"
 
@@ -39,13 +39,11 @@ get_channel_id() {
 
 CH_OPS=$(get_channel_id ops)
 CH_SECURITY=$(get_channel_id security)
-CH_BUGS=$(get_channel_id bugs)
-CH_ANALYTICS=$(get_channel_id analytics)
+CH_LOGISTICS=$(get_channel_id logistics)
 
-echo "     #ops       = $CH_OPS"
-echo "     #security  = $CH_SECURITY"
-echo "     #bugs      = $CH_BUGS"
-echo "     #analytics = $CH_ANALYTICS"
+echo "     #ops          = $CH_OPS"
+echo "     #security     = $CH_SECURITY"
+echo "     #logistics    = $CH_LOGISTICS"
 
 # ── Read bot token from .env ─────────────────────────────────────────────────
 BOT_TOKEN=$(grep '^MATTERMOST_BOT_TOKEN=' .env | cut -d= -f2)
@@ -96,6 +94,14 @@ docker cp "$TMPDIR/credentials.json" "$N8N_CONTAINER:/tmp/credentials.json"
 docker exec "$N8N_CONTAINER" n8n import:credentials --input=/tmp/credentials.json 2>&1
 echo "     Credentials imported"
 
+# ── Seed data ────────────────────────────────────────────────────────────────
+echo "===> Loading seed data..."
+for seed in demo-*/mock-data/seed.sql; do
+    [ -f "$seed" ] || continue
+    docker exec -i demo-postgres psql -U demo -d demo < "$seed" 2>/dev/null && \
+        echo "     Loaded $seed" || echo "     $seed (already loaded or skipped)"
+done
+
 # ── Patch workflows with channel IDs and import ─────────────────────────────
 echo "===> Patching and importing workflows..."
 
@@ -104,23 +110,28 @@ python3 -c "
 import json, sys, os, glob
 
 channel_map = {
-    'Notify Ops':      '$CH_OPS',
-    'Alert Security':  '$CH_SECURITY',
-    'Notify Sprint':   '$CH_OPS',
-    'Send Report':     '$CH_OPS',
-    'Notify Bugs':     '$CH_BUGS',
-    'Notify Analytics':'$CH_ANALYTICS',
+    'Notify Ops':         '$CH_OPS',
+    'Alert Security':     '$CH_SECURITY',
+    'Notify Sprint':      '$CH_OPS',
+    'Send Report':        '$CH_OPS',
+    'Send Help':              '$CH_LOGISTICS',
+    'Send Answer':            '$CH_LOGISTICS',
+    'Send Validation Error':  '$CH_LOGISTICS',
 }
 
 tmpdir = '$TMPDIR'
-wf_dir = '$WORKFLOW_DIR'
+wf_dirs = '$WORKFLOW_DIRS'.split()
 
 import string, random
 def nanoid(size=16):
     alphabet = string.ascii_letters + string.digits
     return ''.join(random.choices(alphabet, k=size))
 
-for fpath in sorted(glob.glob(os.path.join(wf_dir, '*.json'))):
+all_files = []
+for wf_dir in wf_dirs:
+    all_files.extend(sorted(glob.glob(os.path.join(wf_dir, '*.json'))))
+
+for fpath in all_files:
     with open(fpath) as f:
         wf = json.load(f)
 
@@ -155,7 +166,7 @@ docker exec demo-postgres psql -U demo -d n8n -c "
 UPDATE workflow_entity
 SET \"triggerCount\" = (
     SELECT count(*)
-    FROM jsonb_array_elements(nodes) AS n
+    FROM json_array_elements(nodes) AS n
     WHERE n->>'type' LIKE '%Trigger%'
        OR n->>'type' LIKE '%trigger%'
 )

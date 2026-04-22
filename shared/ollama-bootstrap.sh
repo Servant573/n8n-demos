@@ -8,7 +8,6 @@ echo "===> Ollama bootstrap started"
 echo "     Host:        $OLLAMA_HOST"
 echo "     Chat model:  $OLLAMA_MODEL_CHAT"
 echo "     Code model:  $OLLAMA_MODEL_CODE"
-echo "     Embed model: $OLLAMA_MODEL_EMBED"
 
 # Ждём, пока API поднимется
 until curl -sf "$OLLAMA_HOST/api/tags" > /dev/null 2>&1; do
@@ -31,7 +30,6 @@ pull_model() {
 
 pull_model "$OLLAMA_MODEL_CHAT"  "chat"
 pull_model "$OLLAMA_MODEL_CODE"  "code"
-pull_model "$OLLAMA_MODEL_EMBED" "embed"
 
 echo ""
 echo "===> All models ready"

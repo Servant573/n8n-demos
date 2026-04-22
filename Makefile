@@ -1,5 +1,5 @@
 # ============================================================================
-# Демо-стенд: N8N + Mattermost + Ollama + RabbitMQ + Postgres
+# Демо-стенд: N8N + Mattermost + Ollama + Postgres
 # ============================================================================
 #
 #   make init   — первый запуск: .env, сервисы, настройка Mattermost
@@ -46,12 +46,12 @@ init: .env
 	@echo ""
 	@echo "  Mattermost  : http://localhost:8065  (admin / Demo_secret1)"
 	@echo "  N8N         : http://localhost:5678"
-	@echo "  RabbitMQ    : http://localhost:15672  (demo / demo_secret)"
 	@echo "  Postgres    : localhost:5432          (demo / demo_secret)"
 	@echo "  Ollama      : http://localhost:11434"
 	@echo "  GitLab mock : http://localhost:4001"
 	@echo "  CVE feed    : http://localhost:4002"
-	@echo "  mock-svc-lk : http://localhost:3100"
+	@echo ""
+	@echo "  Demo 02: напишите в Mattermost #logistics для AI-ассистента"
 	@echo "============================================================"
 
 # ── Генерация .env из шаблона ────────────────────────────────────────────────

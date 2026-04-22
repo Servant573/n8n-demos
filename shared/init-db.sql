@@ -11,7 +11,6 @@ CREATE DATABASE mattermost;
 \c demo;
 
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-CREATE EXTENSION IF NOT EXISTS vector;      -- pgvector для RAG в demo-03
 
 -- ============================================================================
 -- SCHEMA: cve_watcher (для demo-01)
@@ -67,116 +66,42 @@ CREATE TABLE cve_watcher.ai_triage (
 );
 
 -- ============================================================================
--- SCHEMA: dlq_handler (для demo-02)
+-- SCHEMA: logistics_assistant (для demo-02)
 -- ============================================================================
 
-CREATE SCHEMA IF NOT EXISTS dlq_handler;
+CREATE SCHEMA IF NOT EXISTS logistics_assistant;
 
-CREATE TABLE dlq_handler.counterparties (
-    id           SERIAL PRIMARY KEY,
-    name         TEXT NOT NULL,
-    inn          TEXT NOT NULL UNIQUE,
-    amqp_queue   TEXT NOT NULL,  -- имя очереди этого контрагента
-    manager_email TEXT,
-    mattermost_user TEXT
+CREATE TABLE logistics_assistant.counterparties (
+    id         SERIAL PRIMARY KEY,
+    name       TEXT NOT NULL,
+    inn        TEXT NOT NULL UNIQUE,
+    created_at TIMESTAMP DEFAULT NOW()
 );
 
--- Лог обработанных DLQ-событий
-CREATE TABLE dlq_handler.dlq_events (
-    id                 SERIAL PRIMARY KEY,
-    counterparty_id    INT REFERENCES dlq_handler.counterparties(id),
-    original_queue     TEXT NOT NULL,
-    original_payload   JSONB NOT NULL,
-    error_headers      JSONB NOT NULL,
-    ai_category        TEXT,                    -- our_bug / partner_data / infrastructure / business_rule
-    ai_severity        TEXT,
-    ai_summary_ru      TEXT,
-    ai_action          TEXT,                    -- retry / manual_review / escalate / ignore
-    routing_target     TEXT,                    -- куда улетело уведомление
-    processed_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-CREATE INDEX idx_dlq_counterparty ON dlq_handler.dlq_events (counterparty_id);
-CREATE INDEX idx_dlq_processed_at ON dlq_handler.dlq_events (processed_at DESC);
-
--- ============================================================================
--- SCHEMA: lk_assistant (для demo-03)
--- ============================================================================
-
-CREATE SCHEMA IF NOT EXISTS lk_assistant;
-
--- Имитация tenant'ов (клиентов нашей платформы)
-CREATE TABLE lk_assistant.tenants (
-    id          SERIAL PRIMARY KEY,
-    name        TEXT NOT NULL,
-    ai_tier     TEXT NOT NULL DEFAULT 'basic'  -- 'basic' (Ollama) | 'premium' (внешний LLM)
+CREATE TABLE logistics_assistant.invoices (
+    id               SERIAL PRIMARY KEY,
+    counterparty_id  INT REFERENCES logistics_assistant.counterparties(id),
+    number           TEXT NOT NULL,
+    amount           NUMERIC(12,2) NOT NULL,
+    status           TEXT NOT NULL DEFAULT 'pending',
+    created_at       TIMESTAMP DEFAULT NOW()
 );
 
-CREATE TABLE lk_assistant.users (
-    id          SERIAL PRIMARY KEY,
-    tenant_id   INT NOT NULL REFERENCES lk_assistant.tenants(id),
-    username    TEXT NOT NULL,
-    role        TEXT NOT NULL DEFAULT 'operator',  -- operator / manager / admin
-    UNIQUE (tenant_id, username)
+CREATE TABLE logistics_assistant.integration_logs (
+    id         SERIAL PRIMARY KEY,
+    service    TEXT NOT NULL,
+    level      TEXT NOT NULL DEFAULT 'info',
+    message    TEXT NOT NULL,
+    payload    JSONB,
+    created_at TIMESTAMP DEFAULT NOW()
 );
 
--- Пример бизнес-данных, к которым обращается ассистент
-CREATE TABLE lk_assistant.orders (
-    id             SERIAL PRIMARY KEY,
-    tenant_id      INT NOT NULL REFERENCES lk_assistant.tenants(id),
-    number         TEXT NOT NULL,
-    counterparty   TEXT NOT NULL,
-    amount         NUMERIC(12,2) NOT NULL,
-    status         TEXT NOT NULL,
-    delivery_date  DATE,
-    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-CREATE INDEX idx_orders_tenant ON lk_assistant.orders (tenant_id);
-
-CREATE TABLE lk_assistant.invoices (
-    id             SERIAL PRIMARY KEY,
-    tenant_id      INT NOT NULL REFERENCES lk_assistant.tenants(id),
-    order_id       INT REFERENCES lk_assistant.orders(id),
-    number         TEXT NOT NULL,
-    amount         NUMERIC(12,2) NOT NULL,
-    status         TEXT NOT NULL,
-    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
--- RAG: документы и их чанки с эмбеддингами
-CREATE TABLE lk_assistant.documents (
-    id          SERIAL PRIMARY KEY,
-    tenant_id   INT NOT NULL REFERENCES lk_assistant.tenants(id),
-    title       TEXT NOT NULL,
-    content     TEXT NOT NULL,       -- полный текст (для small docs) или ссылка на svc_disk
-    doc_type    TEXT NOT NULL,       -- 'policy' | 'manual' | 'contract' | ...
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE TABLE lk_assistant.document_chunks (
-    id          SERIAL PRIMARY KEY,
-    document_id INT NOT NULL REFERENCES lk_assistant.documents(id) ON DELETE CASCADE,
-    tenant_id   INT NOT NULL,                         -- дублируем для row-level фильтра
-    chunk_text  TEXT NOT NULL,
-    chunk_idx   INT NOT NULL,
-    embedding   vector(768)                           -- nomic-embed-text = 768-dim
-);
-CREATE INDEX idx_chunks_tenant ON lk_assistant.document_chunks (tenant_id);
-CREATE INDEX idx_chunks_embedding ON lk_assistant.document_chunks
-    USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
-
--- История чата (опционально, для продвинутых сценариев)
-CREATE TABLE lk_assistant.chat_sessions (
-    id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    tenant_id   INT NOT NULL REFERENCES lk_assistant.tenants(id),
-    user_id     INT NOT NULL REFERENCES lk_assistant.users(id),
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE TABLE lk_assistant.chat_messages (
-    id          SERIAL PRIMARY KEY,
-    session_id  UUID NOT NULL REFERENCES lk_assistant.chat_sessions(id) ON DELETE CASCADE,
-    role        TEXT NOT NULL,                     -- 'user' | 'assistant' | 'tool'
-    content     TEXT NOT NULL,
-    metadata    JSONB,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+CREATE TABLE logistics_assistant.data_exchanges (
+    id               SERIAL PRIMARY KEY,
+    counterparty_id  INT REFERENCES logistics_assistant.counterparties(id),
+    direction        TEXT NOT NULL,       -- 'incoming' | 'outgoing'
+    doc_type         TEXT NOT NULL,       -- 'invoice' | 'waybill' | 'act'
+    status           TEXT NOT NULL,       -- 'success' | 'error' | 'pending'
+    error_message    TEXT,
+    created_at       TIMESTAMP DEFAULT NOW()
 );

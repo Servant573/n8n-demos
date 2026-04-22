@@ -1,0 +1,327 @@
+{
+  "id": "fgVzb0tSELbz35Id",
+  "name": "01 — Logistics AI Assistant",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "logistics-ai",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "b2000001-0001-4000-8000-000000000001",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-200, 300],
+      "webhookId": "logistics-ai"
+    },
+    {
+      "parameters": {
+        "respondWith": "noData",
+        "options": {}
+      },
+      "id": "b2000001-0001-4000-8000-00000000000a",
+      "name": "Respond OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [0, 140]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json;\nconst body = raw.body || raw;\n\nif (!body || !body.text) return [];\nif (body.user_name === 'n8n-bot') return [];\n\nconst text = (typeof body.text === 'string' ? body.text : String(body.text)).trim();\nif (!text) return [];\n\nreturn [{ json: { text, user_name: body.user_name || '', channel_id: body.channel_id || '' } }];"
+      },
+      "id": "b2000001-0001-4000-8000-000000000002",
+      "name": "Filter Bot Messages",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [0, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false },
+          "combinator": "or",
+          "conditions": [
+            {
+              "id": "cond-help-1",
+              "leftValue": "={{ $json.text }}",
+              "rightValue": "/help",
+              "operator": { "type": "string", "operation": "equals" }
+            },
+            {
+              "id": "cond-help-2",
+              "leftValue": "={{ $json.text }}",
+              "rightValue": "помощь",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ]
+        }
+      },
+      "id": "b2000001-0001-4000-8000-000000000003",
+      "name": "Check Help",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "channelId": "CONFIGURE_CHANNEL_ID",
+        "message": "Привет! Я AI-ассистент логистической платформы.\n\nЗадайте вопрос в свободной форме, например:\n- Покажи все счета от Ромашки\n- Какие ошибки интеграции за последнюю неделю?\n- Статус обмена данными с Быстрая Доставка\n\nЯ найду информацию в базе данных и отвечу.",
+        "otherOptions": {}
+      },
+      "id": "b2000001-0001-4000-8000-000000000004",
+      "name": "Send Help",
+      "type": "n8n-nodes-base.mattermost",
+      "typeVersion": 1,
+      "position": [500, 160],
+      "credentials": {
+        "mattermostApi": { "id": "2", "name": "Mattermost Demo" }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://ollama:11434/api/chat",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'qwen2.5:7b', messages: [ { role: 'system', content: 'Ты — ассистент для логистической IT-платформы. Твоя задача — преобразовать вопрос пользователя в SQL-запрос к PostgreSQL.\\n\\nСхема базы данных:\\n\\nТаблица: logistics_assistant.counterparties (id SERIAL, name TEXT, inn TEXT, created_at TIMESTAMP)\\nТаблица: logistics_assistant.invoices (id SERIAL, counterparty_id INT REFERENCES logistics_assistant.counterparties(id), number TEXT, amount NUMERIC, status TEXT, created_at TIMESTAMP)\\nТаблица: logistics_assistant.integration_logs (id SERIAL, service TEXT, level TEXT, message TEXT, payload JSONB, created_at TIMESTAMP)\\nТаблица: logistics_assistant.data_exchanges (id SERIAL, counterparty_id INT REFERENCES logistics_assistant.counterparties(id), direction TEXT, doc_type TEXT, status TEXT, error_message TEXT, created_at TIMESTAMP)\\n\\nПравила:\\n1. Генерируй ТОЛЬКО SELECT-запросы\\n2. Всегда добавляй LIMIT 50\\n3. Для поиска по имени используй ILIKE с %\\n4. Для дат по умолчанию бери последние 7 дней: created_at >= NOW() - INTERVAL \\'7 days\\'\\n5. Возвращай ТОЛЬКО SQL-запрос, без пояснений, без markdown, без ```\\n6. Всегда используй полные имена таблиц с префиксом схемы logistics_assistant.\\n7. Если вопрос про ошибки интеграции — ищи в logistics_assistant.integration_logs и logistics_assistant.data_exchanges\\n8. Если вопрос про контрагента — ищи в logistics_assistant.counterparties, logistics_assistant.invoices и logistics_assistant.data_exchanges' }, { role: 'user', content: $('Filter Bot Messages').item.json.text } ], stream: false, keep_alive: '30m', options: { temperature: 0.1 } }) }}",
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "id": "b2000001-0001-4000-8000-000000000005",
+      "name": "Generate SQL",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [500, 440]
+    },
+    {
+      "parameters": {
+        "jsCode": "const rawContent = $input.first().json.message.content;\n\nconst sql = rawContent\n  .replace(/```sql\\n?/g, '')\n  .replace(/```\\n?/g, '')\n  .trim();\n\nconst upper = sql.toUpperCase();\n\nconst FORBIDDEN_KEYWORDS = [\n  'DROP', 'DELETE', 'UPDATE', 'INSERT', 'ALTER',\n  'TRUNCATE', 'CREATE', 'GRANT', 'REVOKE', 'EXEC'\n];\n\nconst ALLOWED_TABLES = [\n  'logistics_assistant.counterparties',\n  'logistics_assistant.invoices',\n  'logistics_assistant.integration_logs',\n  'logistics_assistant.data_exchanges',\n  'counterparties', 'invoices', 'integration_logs', 'data_exchanges'\n];\n\nif (!upper.startsWith('SELECT')) {\n  return [{ json: { valid: false, error: 'Запрос должен начинаться с SELECT', sql } }];\n}\n\nfor (const kw of FORBIDDEN_KEYWORDS) {\n  const regex = new RegExp(`\\\\b${kw}\\\\b`, 'i');\n  if (regex.test(sql)) {\n    return [{ json: { valid: false, error: `Обнаружена запрещённая команда: ${kw}`, sql } }];\n  }\n}\n\nconst tableMatches = sql.match(/(?:FROM|JOIN)\\s+([\\w]+\\.[\\w]+|[\\w]+)/gi) || [];\nconst BARE_NAMES = ['counterparties', 'invoices', 'integration_logs', 'data_exchanges'];\nfor (const match of tableMatches) {\n  const table = match.replace(/(?:FROM|JOIN)\\s+/i, '').toLowerCase();\n  if (!ALLOWED_TABLES.includes(table)) {\n    return [{ json: { valid: false, error: `Таблица '${table}' не в списке разрешённых`, sql } }];\n  }\n}\n\nlet finalSql = sql.replace(/;\\s*$/, '');\nfor (const bare of BARE_NAMES) {\n  const re = new RegExp(`(?<=FROM|JOIN)\\\\s+(?!logistics_assistant\\\\.)${bare}\\\\b`, 'gi');\n  finalSql = finalSql.replace(re, ` logistics_assistant.${bare}`);\n}\n\nif (!upper.includes('LIMIT')) {\n  finalSql += ' LIMIT 50';\n}\n\nreturn [{ json: { valid: true, sql: finalSql } }];"
+      },
+      "id": "b2000001-0001-4000-8000-000000000006",
+      "name": "Validate SQL",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [750, 440]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "cond-valid",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "equals" }
+            }
+          ]
+        }
+      },
+      "id": "b2000001-0001-4000-8000-000000000007",
+      "name": "Check Validation",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1000, 440]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "channelId": "CONFIGURE_CHANNEL_ID",
+        "message": "=Не удалось выполнить запрос: {{ $('Validate SQL').item.json.error }}\n\nПопробуйте переформулировать вопрос.",
+        "otherOptions": {}
+      },
+      "id": "b2000001-0001-4000-8000-000000000008",
+      "name": "Send Validation Error",
+      "type": "n8n-nodes-base.mattermost",
+      "typeVersion": 1,
+      "position": [1250, 600],
+      "credentials": {
+        "mattermostApi": { "id": "2", "name": "Mattermost Demo" }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $('Validate SQL').item.json.sql }}",
+        "options": {}
+      },
+      "id": "b2000001-0001-4000-8000-000000000009",
+      "name": "Execute Query",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1250, 300],
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "postgres": { "id": "1", "name": "Demo Postgres" }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const question = $('Filter Bot Messages').item.json.text;\nconst queryItems = $('Execute Query').all();\nconst firstItem = queryItems[0]?.json || {};\n\nif (firstItem.error || firstItem.message?.includes?.('error')) {\n  return [{ json: { _skipOllama: true, message: { content: 'Не удалось выполнить запрос к базе данных. Попробуйте переформулировать вопрос.' } } }];\n}\n\nconst rows = queryItems.map(item => item.json);\nconst resultJson = JSON.stringify(rows, null, 2);\n\nconst userMessage = `Вопрос клиента: ${question}\\n\\nРезультат запроса к БД (JSON):\\n${resultJson}`;\n\nreturn [{\n  json: {\n    model: 'qwen2.5:7b',\n    messages: [\n      {\n        role: 'system',\n        content: 'Ты — ассистент для логистической IT-платформы. Тебе дан вопрос клиента и результат SQL-запроса к базе данных. Дай понятный ответ на русском языке.\\n\\nПравила:\\n1. Отвечай кратко и по делу\\n2. Если данные найдены — опиши что нашлось, укажи ключевые цифры\\n3. Если данных нет — скажи что не найдено и предложи что проверить\\n4. Если видишь ошибки — укажи на возможную причину и на чьей стороне проблема\\n5. Не показывай SQL-запрос\\n6. Не используй markdown-форматирование (жирный, курсив) — только простой текст'\n      },\n      {\n        role: 'user',\n        content: userMessage\n      }\n    ],\n    stream: false,\n    keep_alive: '30m',\n    options: { temperature: 0.1 }\n  }\n}];"
+      },
+      "id": "b2000001-0001-4000-8000-00000000000b",
+      "name": "Prepare Analysis",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1500, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://ollama:11434/api/chat",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "id": "b2000001-0001-4000-8000-00000000000c",
+      "name": "Analyze Result",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2000, 440]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "channelId": "CONFIGURE_CHANNEL_ID",
+        "message": "={{ $json.message.content }}",
+        "otherOptions": {}
+      },
+      "id": "b2000001-0001-4000-8000-00000000000e",
+      "name": "Check SQL Error",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1750, 300],
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "cond-skip-1",
+              "leftValue": "={{ $json._skipOllama }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true" }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "b2000001-0001-4000-8000-00000000000d",
+      "name": "Send Answer",
+      "type": "n8n-nodes-base.mattermost",
+      "typeVersion": 1,
+      "position": [2250, 300],
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "channelId": "CONFIGURE_CHANNEL_ID",
+        "message": "={{ $json.message.content }}",
+        "otherOptions": {}
+      },
+      "credentials": {
+        "mattermostApi": { "id": "2", "name": "Mattermost Demo" }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          { "node": "Respond OK", "type": "main", "index": 0 },
+          { "node": "Filter Bot Messages", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Filter Bot Messages": {
+      "main": [
+        [
+          { "node": "Check Help", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Check Help": {
+      "main": [
+        [
+          { "node": "Send Help", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Generate SQL", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Generate SQL": {
+      "main": [
+        [
+          { "node": "Validate SQL", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Validate SQL": {
+      "main": [
+        [
+          { "node": "Check Validation", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Check Validation": {
+      "main": [
+        [
+          { "node": "Execute Query", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Send Validation Error", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Execute Query": {
+      "main": [
+        [
+          { "node": "Prepare Analysis", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Prepare Analysis": {
+      "main": [
+        [
+          { "node": "Check SQL Error", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Check SQL Error": {
+      "main": [
+        [
+          { "node": "Send Answer", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Analyze Result", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Analyze Result": {
+      "main": [
+        [
+          { "node": "Send Answer", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "staticData": null,
+  "tags": []
+}

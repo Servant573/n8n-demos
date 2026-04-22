@@ -139,6 +139,27 @@ for CH in $CHANNELS; do
     echo "     Bot → #$CH"
 done
 
+# ── Outgoing Webhook for demo-02 (Logistics AI → n8n) ───────────────────────
+echo "===> Setting up outgoing webhook for #logistics..."
+LOGISTICS_CH_ID=$(curl -s -H "$AUTH" "$MM_URL/api/v4/teams/$TEAM_ID/channels/name/logistics" \
+    | jq -r '.id // empty')
+
+if [ -n "$LOGISTICS_CH_ID" ] && [ "$LOGISTICS_CH_ID" != "null" ]; then
+    EXISTING_HOOK=$(curl -s -H "$AUTH" "$MM_URL/api/v4/hooks/outgoing" \
+        | jq -r ".[] | select(.channel_id==\"$LOGISTICS_CH_ID\") | .id // empty")
+
+    if [ -z "$EXISTING_HOOK" ]; then
+        curl -sf -H "$AUTH" -H 'Content-Type: application/json' \
+            -d "{\"team_id\":\"$TEAM_ID\",\"channel_id\":\"$LOGISTICS_CH_ID\",\"display_name\":\"Logistics AI\",\"description\":\"Forwards messages to n8n for AI processing\",\"content_type\":\"application/json\",\"trigger_when\":0,\"callback_urls\":[\"http://n8n:5678/webhook/logistics-ai\"]}" \
+            "$MM_URL/api/v4/hooks/outgoing" > /dev/null
+        echo "     Outgoing webhook created → http://n8n:5678/webhook/logistics-ai"
+    else
+        echo "     Outgoing webhook already exists"
+    fi
+else
+    echo "     #logistics channel not found, skipping webhook"
+fi
+
 echo ""
 echo "===> Mattermost bootstrap complete"
 echo "     UI: http://localhost:8065  (login: $ADMIN_USER / $ADMIN_PASS)"
