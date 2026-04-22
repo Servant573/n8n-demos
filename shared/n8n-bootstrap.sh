@@ -173,6 +173,25 @@ SET \"triggerCount\" = (
 WHERE \"triggerCount\" = 0;" 2>/dev/null
 echo "     triggerCount updated"
 
+# ── Activate webhook-based workflows ─────────────────────────────────────────
+echo "===> Activating webhook workflows..."
+docker exec "$N8N_CONTAINER" n8n list:workflow 2>/dev/null | while IFS='|' read -r wf_id wf_name; do
+    case "$wf_name" in
+        *Logistics*|*logistics*)
+            docker exec "$N8N_CONTAINER" n8n update:workflow --id="$wf_id" --active=true 2>&1 || true
+            echo "     Activated: $wf_name ($wf_id)"
+            ;;
+    esac
+done
+
+# ── Restart n8n to register webhooks ─────────────────────────────────────────
+echo "===> Restarting n8n to register webhooks..."
+docker restart "$N8N_CONTAINER" > /dev/null 2>&1
+until curl -sf "$N8N_URL/healthz" > /dev/null 2>&1; do
+    sleep 3
+done
+echo "     n8n restarted, webhooks registered"
+
 echo ""
 echo "===> n8n bootstrap complete"
 echo "     Workflows and credentials imported"

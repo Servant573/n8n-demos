@@ -79,7 +79,9 @@ services:
 
   # ── N8N — оркестратор ──────────────────────────────────────────────────────
   n8n:
-    image: n8nio/n8n:latest
+    build:
+      context: .
+      dockerfile: shared/n8n.Dockerfile
     container_name: demo-n8n
     networks: [demo-net]
     depends_on:
@@ -98,15 +100,12 @@ services:
       N8N_PROTOCOL: http
       WEBHOOK_URL: http://localhost:5678/
       GENERIC_TIMEZONE: Europe/Moscow
-      # ↓ Для тестов разрешаем использовать внешние npm в Code-нодах.
-      # В продакшне настраивай whitelist.
       NODE_FUNCTION_ALLOW_EXTERNAL: "semver,axios,lodash,moment"
       N8N_LOG_LEVEL: info
     ports:
       - "5678:5678"
     volumes:
       - n8n_data:/home/node/.n8n
-      # монтируем все демо-воркфлоу сразу — их можно будет импортировать из UI
       - ./demo-01-cve-watcher/workflows:/demo-workflows/01-cve:ro
       - ./demo-02-logistics-ai/workflows:/demo-workflows/02-logistics:ro
 
